@@ -102,6 +102,58 @@ def bbox2gtmap(bboxes, dert_bboxes, format='flickr'):
     return gt_map, gt_map_dert
 
 
+class AudioVisualDatasetInference(Dataset):
+    def __init__(self, paths, files, audio_dur=3., image_transform=None, detr_transform=None, audio_transform=None):
+        """
+         Initialize the dataset for inference.
+
+         :param paths: List of paths [image_path, audio_path].
+         :param files: List of files [image_files, audio_files].
+         :param audio_dur: Duration of audio clips (default is 3 seconds).
+         :param image_transform: Transformations to apply to the images.
+         :param detr_transform: Transformations to apply to images for DETR model.
+         :param audio_transform: Transformations to apply to the audio spectrograms.
+         """
+
+        super().__init__()
+        self.image_files = files[0]
+        self.audio_files = files[1]
+        self.image_path = paths[0]
+        self.audio_path = paths[1]
+
+        self.audio_dur = audio_dur
+
+        self.image_transform = image_transform
+        self.audio_transform = audio_transform
+        self.detr_transform = detr_transform
+
+    def getitem(self, idx):
+        file = self.image_files[idx]
+        file_id = file.split('.')[0]
+
+        # Image
+        img_fn = os.path.join(self.image_path, self.image_files[idx])
+        frame = self.image_transform(load_image(img_fn))
+        if self.detr_transform is not None:
+            detr_frame = self.detr_transform(load_image(img_fn))
+        else:
+            detr_frame = np.zeros((1, 1))
+
+        # Audio
+        audio_fn = os.path.join(self.audio_path, self.audio_files[idx])
+        spectrogram = self.audio_transform(load_spectrogram(audio_fn))
+
+        return frame, detr_frame, spectrogram, file_id
+    def __len__(self):
+        return len(self.image_files)
+
+    def __getitem__(self, idx):
+        try:
+            return self.getitem(idx)
+        except Exception:
+            return self.getitem(random.sample(range(len(self)), 1)[0])
+
+
 class AudioVisualDatasetTest(Dataset):
     def __init__(self, paths, files, audio_dur=3., image_transform=None, detr_transform=None, audio_transform=None, all_bboxes=None, all_bboxes_detr=None, bbox_format='flickr'):
         super().__init__()
@@ -236,12 +288,53 @@ class AudioVisualDatasetTrain(Dataset):
             return self.getitem(random.sample(range(len(self)), 1)[0])
 
 
+
 def check_available_samples(data_path, kind):
     _path = os.path.join(data_path, '{}'.format(kind))
     _files = {f.split('.')[0] for dirpath, dirnames, filenames in os.walk(_path) for f in filenames}
     print('Number of available {} files: {}'.format(kind, len(_files)))
     assert len(_files) != 0
     return _files, _path
+
+
+def get_inference_dataset(timestamp, audio_dir, frames_dir):
+    """
+    Create an instance of the inference dataset.
+
+    :param timestamp: Timestamp of the files to be used (e.g., '20230615_123456').
+    :param audio_dir: Directory where the audio files are stored.
+    :param frames_dir: Directory where the image files are stored.
+    :return: Instance of AudioVisualDatasetInference.
+    """
+
+    image_files = [(f"{timestamp}.jpg")]
+    audio_files = [(f"{timestamp}.wav")]
+
+    assert len(image_files) > 0
+    assert len(audio_files) > 0
+
+    # Transforms
+    image_transform = transforms.Compose([
+        transforms.Resize((224, 224), transforms.InterpolationMode.BICUBIC),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225])])
+    audio_transform = transforms.Compose([transforms.ToTensor(),
+                                          transforms.Normalize(mean=[0.0], std=[12.0])])
+
+    detr_transform = transforms.Compose([
+        transforms.Resize((800, 800)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+
+    files = [image_files, audio_files]
+    paths = [frames_dir, audio_dir]
+    return AudioVisualDatasetInference(paths, files,
+                                  audio_dur=3.,
+                                  image_transform=image_transform,
+                                  detr_transform=detr_transform,
+                                  audio_transform=audio_transform )
 
 
 def get_train_dataset(args):
